@@ -10,6 +10,7 @@ import os
 import errno
 import socket
 import asynchat
+import threading
 
 from ghpu import GitHubPluginUpdater
 
@@ -50,14 +51,17 @@ class SMTPChannel(asynchat.async_chat):
 
 	# Overrides base class for convenience
 	def push(self, msg):
+		indigo.activePlugin.debugLog(u'SMTPChannel push: %s' % msg)
 		asynchat.async_chat.push(self, msg + '\r\n')
 
 	# Implementation of base class abstract method
 	def collect_incoming_data(self, data):
+		indigo.activePlugin.debugLog(u'SMTPChannel collect: %s' % data)
 		self.__line.append(data)
 
 	# Implementation of base class abstract method
 	def found_terminator(self):
+		indigo.activePlugin.debugLog(u'SMTPChannel found_terminator')
 		line = EMPTYSTRING.join(self.__line)
 		self.__line = []
 		if self.__state == self.COMMAND:
@@ -188,6 +192,7 @@ class SMTPServer(asyncore.dispatcher):
 	
 	def __init__(self, localaddr):
 		self._localaddr = localaddr
+		indigo.activePlugin.debugLog(u'SMTPServer __init__: %s' % str(localaddr))
 
 		asyncore.dispatcher.__init__(self)
 		try:
@@ -204,7 +209,23 @@ class SMTPServer(asyncore.dispatcher):
 
 
 	def __del__(self, device):
+		indigo.activePlugin.debugLog(u'SMTPServer closing')
 		self.close()
+
+	def handle_read(self):
+		indigo.activePlugin.debugLog(u'SMTPServer handle_read')
+
+	def handle_write(self):
+		indigo.activePlugin.debugLog(u'SMTPServer handle_write')
+
+	def handle_connect(self):
+		indigo.activePlugin.debugLog(u'SMTPServer handle_connect')
+
+	def handle_close(self):
+		indigo.activePlugin.debugLog(u'SMTPServer handle_close')
+
+	def handle_error(self):
+		indigo.activePlugin.debugLog(u'SMTPServer handle_error')
 
 	def handle_accept(self):
 		indigo.activePlugin.debugLog(u'SMTPServer handle_accept')
@@ -248,16 +269,21 @@ class Plugin(indigo.PluginBase):
 	def startup(self):
 		indigo.server.log(u"Starting SMTPd")
 		
+		self.triggers = { }
+		self.sck_map = {}
+
 		self.updater = GitHubPluginUpdater(self)
 		self.updateFrequency = float(self.pluginPrefs.get('updateFrequency', '24')) * 60.0 * 60.0
 		self.next_update_check = time.time()
 
-		self.serverDict = dict()
-		self.triggers = { }
+
+		port = int(self.pluginPrefs.get('smtpPort', '2525'))
+		self.smtpServer = SMTPServer(('0.0.0.0', port))
 							
 	def shutdown(self):
 		indigo.server.log(u"Shutting down SMTPd")
-
+		self.smtpServer.close()
+		
 
 	def runConcurrentThread(self):
 		
@@ -269,24 +295,13 @@ class Plugin(indigo.PluginBase):
 						self.updater.checkForUpdate()
 						self.next_update_check = time.time() + self.updateFrequency
 
-				if (len(self.serverDict) > 0):				
-					self.debugLog(u"asyncore.loop(timeout=1, count=1)")
-					asyncore.loop(timeout=1, count=1)
-					self.sleep(0.1) 
-				else:
-					self.sleep(1.0)
+#				asyncore.loop(timeout=1, count=1)
+				asyncore.loop()
+				self.sleep(0.1)
 								
 		except self.stopThread:
 			pass
 							
-
-	####################
-
-	def getDeviceConfigUiValues(self, pluginProps, typeId, devId):
-		self.debugLog("getDeviceConfigUiValues, typeID = " + typeId)
-		valuesDict = indigo.Dict(pluginProps)
-		errorsDict = indigo.Dict()
-		return (valuesDict, errorsDict)
 	  
 	
 	####################
@@ -315,6 +330,10 @@ class Plugin(indigo.PluginBase):
 		if (updateFrequency < 0) or (updateFrequency > 24):
 			errorDict['updateFrequency'] = u"Update frequency is invalid - enter a valid number (between 0 and 24)"
 
+		smtpPort = int(valuesDict['smtpPort'])
+		if smtpPort < 1024:
+			errorDict['smtpPort'] = u"SMTP Port Number invalid"
+
 		if len(errorDict) > 0:
 			return (False, valuesDict, errorDict)
 		return (True, valuesDict)
@@ -327,85 +346,6 @@ class Plugin(indigo.PluginBase):
 				self.debugLog(u"Debug logging enabled")
 			else:
 				self.debugLog(u"Debug logging disabled")
-
-
-	########################################
-	# Called for each enabled Device belonging to plugin
-	# Verify connectivity to servers and start polling IMAP/POP servers here
-	#
-	def deviceStartComm(self, device):
-		self.debugLog(u'Called deviceStartComm(self, device): %s (%s)' % (device.name, device.id))
-		props = device.pluginProps
-						
-		instanceVers = int(props.get('devVersCount', 0))
-		self.debugLog(device.name + u": Device Current Version = " + str(instanceVers))
-
-		if instanceVers >= kCurDevVersCount:
-			self.debugLog(device.name + u": Device Version is up to date")
-			
-		elif instanceVers < kCurDevVersCount:
-			newProps = device.pluginProps
-
-		else:
-			self.errorLog(u"Unknown device version: " + str(instanceVers) + " for device " + device.name)					
-			
-#		if len(props) < 3:
-#			self.errorLog(u"Server \"%s\" is misconfigured - disabling" % device.name)
-#			indigo.device.enable(device, value=False)
-		
-		port = int(props.get('smtpPort', '2525'))
-		if device.id not in self.serverDict:
-			self.debugLog(u"Starting server: " + device.name)
-			if device.deviceTypeId == "smtpd":
-				self.serverDict[device.id] = SMTPServer(('127.0.0.1', port))	
-			else:
-				self.errorLog(u"Unknown server device type: " + str(device.deviceTypeId))					
-		else:
-			self.debugLog(u"Duplicate Device ID: " + device.name)
-
-
-	########################################
-	# Terminate communication with servers
-	#
-	def deviceStopComm(self, device):
-		self.debugLog(u'Called deviceStopComm(self, device): %s (%s)' % (device.name, device.id))
-		props = device.pluginProps
-
-		if device.id in self.serverDict:
-			self.debugLog(u"Stopping server: " + device.name)
-			del self.serverDict[device.id]
-		else:
-			self.debugLog(u"Unknown Device ID: " + device.name)
-				
-	########################################
-	def validateDeviceConfigUi(self, valuesDict, typeId, devId):
-		errorsDict = indigo.Dict()
-		if len(errorsDict) > 0:
-			return (False, valuesDict, errorsDict)
-		return (True, valuesDict)
-
-	########################################
-	def validateActionConfigUi(self, valuesDict, typeId, devId):
-		errorsDict = indigo.Dict()
-		try:
-			pass
-		except:
-			pass
-		if len(errorsDict) > 0:
-			return (False, valuesDict, errorsDict)
-		return (True, valuesDict)
-
-	########################################
-	# Plugin Actions object callbacks
-	########################################
-
-	def pickServer(self, filter=None, valuesDict=None, typeId=0, targetId=0):
-		retList =[(kAnyDevice, "Any")]
-		for dev in indigo.devices.iter("self"):
-			if (dev.deviceTypeId == "smtpd"): 
-				retList.append((dev.id,dev.name))
-		retList.sort(key=lambda tup: tup[1])
-		return retList
 
 
 	########################################
@@ -425,18 +365,4 @@ class Plugin(indigo.PluginBase):
 
 	def forceUpdate(self):
 		self.updater.update(currentVersion='0.0.0')
-
-	########################################
-	# ConfigUI methods
-	########################################
-
-
-	def validateActionConfigUi(self, valuesDict, typeId, actionId):
-		errorDict = indigo.Dict()
-
-		if len(errorDict) > 0:
-			return (False, valuesDict, errorDict)
-		else:
-			return (True, valuesDict)
-	
 

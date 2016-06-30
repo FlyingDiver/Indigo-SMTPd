@@ -3,12 +3,6 @@
 	<SupportURL>http://forums.indigodomo.com/viewforum.php?f=177</SupportURL>
     <Event id="messageReceived">
         <Name>SMTP Message Received</Name>
-		<ConfigUI>
-        	<Field id="smtpdDevice" type="menu">
-            	<Label>SMTPd Device:</Label>
-            	<List class="self" filter="" method="pickServer" dynamicReload="true"/>
-			</Field>
-		</ConfigUI>
     </Event>
 </Events>
 
