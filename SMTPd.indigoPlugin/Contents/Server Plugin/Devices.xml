@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<Devices>
+	<Device type="custom" id="smtpd">
+		<Name>SMTP Listener</Name>
+		<ConfigUI>
+			<SupportURL>http://forums.indigodomo.com/viewforum.php?f=177</SupportURL>
+			<Field id="smtpPort" type="textfield">
+				<Label>Port Number:</Label>
+			</Field>
+		</ConfigUI>
+		<States>
+			<State id="serverStatus">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Server Status</TriggerLabel>
+				<ControlPageLabel>Server Status</ControlPageLabel>
+			</State>
+			<State id="messageSubject">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Message Subject</TriggerLabel>
+				<ControlPageLabel>Message Subject</ControlPageLabel>
+			</State>
+			<State id="messageText">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Message Text</TriggerLabel>
+				<ControlPageLabel>Message Text</ControlPageLabel>
+			</State>
+			<State id="messageFrom">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Message From</TriggerLabel>
+				<ControlPageLabel>Message From</ControlPageLabel>
+			</State>
+		</States>
+		<UiDisplayStateId>serverStatus</UiDisplayStateId>
+	</Device>
+</Devices>
