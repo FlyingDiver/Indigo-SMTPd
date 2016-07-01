@@ -23,6 +23,41 @@ from email.mime.text import MIMEText
 from email import Charset, message_from_string
 from email.header import Header, decode_header
 
+########################################
+
+def updateVar(name, value, folder):
+	if name not in indigo.variables:
+		indigo.variable.create(name, value=value, folder=folder)
+	else:
+		indigo.variable.updateValue(name, value)
+
+########################################
+
+class SimpleRealm:
+	implements(IRealm)
+
+	def requestAvatar(self, avatarId, mind, *interfaces):
+		if smtp.IMessageDelivery in interfaces:
+			return smtp.IMessageDelivery, SMTPdMessageDelivery(), lambda: None
+		raise NotImplementedError()
+
+########################################
+
+class MySMTPFactory(smtp.SMTPFactory):
+	protocol = smtp.ESMTP
+
+	def __init__(self, *a, **kw):
+		smtp.SMTPFactory.__init__(self, *a, **kw)
+		self.delivery = SMTPdMessageDelivery()
+
+	def buildProtocol(self, addr):
+		p = smtp.SMTPFactory.buildProtocol(self, addr)
+		p.delivery = self.delivery
+		p.challengers = {"LOGIN": LOGINCredentials, "PLAIN": PLAINCredentials}
+		return p
+
+########################################
+
 class SMTPdMessageDelivery:
 	implements(smtp.IMessageDelivery)
 	
@@ -33,10 +68,11 @@ class SMTPdMessageDelivery:
 		return origin
 
 	def validateTo(self, user):					# any user address
-		return lambda: ConsoleMessage()
+		return lambda: MessageHandler()
 
+########################################
 
-class ConsoleMessage:
+class MessageHandler:
 	implements(smtp.IMessage)
 	
 	def __init__(self):
@@ -53,21 +89,18 @@ class ConsoleMessage:
 			messageTo = bytes.decode(encoding)
 		else:
 			messageTo = message.get("To")
-		indigo.activePlugin.debugLog(u"Received Message To: " + messageTo)
 
 		bytes, encoding = decode_header(message.get("From"))[0]
 		if encoding:
 			messageFrom = bytes.decode(encoding)
 		else:
 			messageFrom = message.get("From")
-		indigo.activePlugin.debugLog(u"Received Message From: " + messageFrom)
 
 		bytes, encoding = decode_header(message.get("Subject"))[0]
 		if encoding:
 			messageSubject = bytes.decode(encoding)
 		else:
 			messageSubject = message.get("Subject")
-		indigo.activePlugin.debugLog(u"Received Message Subject: " + messageSubject)
 		
 		try:
 			if message.is_multipart():
@@ -88,7 +121,16 @@ class ConsoleMessage:
 			indigo.activePlugin.debugLog('Error decoding Body of Message # ' + messageNum + ": " + str(e))
 			messageText = u""	
 
+		indigo.activePlugin.debugLog(u"Received Message To: " + messageTo)
+		indigo.activePlugin.debugLog(u"Received Message From: " + messageFrom)
+		indigo.activePlugin.debugLog(u"Received Message Subject: " + messageSubject)
 		indigo.activePlugin.debugLog(u"Received Message Text: " + messageText)
+		
+		updateVar("smtpd_messageTo",	  messageTo,	  indigo.activePlugin.pluginPrefs["folderId"])
+		updateVar("smtpd_messageFrom",	  messageFrom,	  indigo.activePlugin.pluginPrefs["folderId"])
+		updateVar("smtpd_messageSubject", messageSubject, indigo.activePlugin.pluginPrefs["folderId"])
+		updateVar("smtpd_messageText",	  messageText,	  indigo.activePlugin.pluginPrefs["folderId"])
+
 		indigo.activePlugin.triggerCheck()
 
 		self.lines = None
@@ -98,35 +140,9 @@ class ConsoleMessage:
 		self.lines = None
 
 
-class ConsoleSMTPFactory(smtp.SMTPFactory):
-	protocol = smtp.ESMTP
-
-	def __init__(self, *a, **kw):
-		smtp.SMTPFactory.__init__(self, *a, **kw)
-		self.delivery = SMTPdMessageDelivery()
-
-	def buildProtocol(self, addr):
-		p = smtp.SMTPFactory.buildProtocol(self, addr)
-		p.delivery = self.delivery
-		p.challengers = {"LOGIN": LOGINCredentials, "PLAIN": PLAINCredentials}
-		return p
-
-
-class SimpleRealm:
-	implements(IRealm)
-
-	def requestAvatar(self, avatarId, mind, *interfaces):
-		if smtp.IMessageDelivery in interfaces:
-			return smtp.IMessageDelivery, SMTPdMessageDelivery(), lambda: None
-		raise NotImplementedError()
-
-
 ################################################################################
 class Plugin(indigo.PluginBase):
 					
-	smtpFactory = None
-	listeningPort = None
-
 	########################################
 	# Main Plugin methods
 	########################################
@@ -142,6 +158,12 @@ class Plugin(indigo.PluginBase):
 		self.updater = GitHubPluginUpdater(self)
 		self.updateFrequency = float(self.pluginPrefs.get('updateFrequency', '24')) * 60.0 * 60.0
 		self.next_update_check = time.time()
+
+		if "SMTPd" in indigo.variables.folders:
+			myFolder = indigo.variables.folders["SMTPd"]
+		else:
+			myFolder = indigo.variables.folder.create("SMTPd")
+		self.pluginPrefs["folderId"] = myFolder.id
 
 		self.triggers = { }
 
@@ -161,7 +183,7 @@ class Plugin(indigo.PluginBase):
 		portal.registerChecker(checker)
 
 		try:
-			self.smtpFactory = ConsoleSMTPFactory(portal)
+			self.smtpFactory = MySMTPFactory(portal)
 			self.listeningPort = reactor.listenTCP(port, self.smtpFactory)
 			reactor.run()
 		except self.StopThread:
