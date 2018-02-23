@@ -18,6 +18,7 @@ import shutil
 import json
 import httplib
 import plistlib
+import logging
 
 import ConfigParser
 
@@ -34,6 +35,7 @@ class GitHubPluginUpdater(object):
     #---------------------------------------------------------------------------
     def __init__(self, plugin=None, configFile='ghpu.cfg'):
         self.plugin = plugin
+        self.logger = logging.getLogger("Plugin.ghpu")
 
         config = ConfigParser.RawConfigParser()
         config.read(configFile)
@@ -51,17 +53,17 @@ class GitHubPluginUpdater(object):
     #---------------------------------------------------------------------------
     # install the latest version of the plugin represented by this updater
     def install(self):
-        self._log('Installing plugin from %s/%s...' % (self.owner, self.repo))
+        self.logger.info('Installing plugin from %s/%s...' % (self.owner, self.repo))
         latestRelease = self.getLatestRelease()
 
         if (latestRelease == None):
-            self._error('No release available')
+            self.logger.error('No release available')
             return False
 
         try:
             self._installRelease(latestRelease)
         except Exception as e:
-            self._error(str(e))
+            self.logger.exception(str(e))
             return False
 
         return True
@@ -75,7 +77,7 @@ class GitHubPluginUpdater(object):
         try:
             self._installRelease(update)
         except Exception as e:
-            self._error(str(e))
+            self.logger.exception(str(e))
             return False
 
         return True
@@ -90,17 +92,17 @@ class GitHubPluginUpdater(object):
     #---------------------------------------------------------------------------
     # returns the update package, if there is one
     def getUpdate(self, currentVersion):
-        self._debug('Current version is: %s' % currentVersion)
+        self.logger.debug('Current version is: %s' % currentVersion)
 
         update = self.getLatestRelease()
 
         if (update == None):
-            self._debug('No release available')
+            self.logger.debug('No release available')
             return None
 
         # assume the tag is the release version
         latestVersion = update['tag_name'].lstrip('v')
-        self._debug('Latest release is: %s' % latestVersion)
+        self.logger.debug('Latest release is: %s' % latestVersion)
 
         if (ver(currentVersion) >= ver(latestVersion)):
             return None
@@ -111,7 +113,7 @@ class GitHubPluginUpdater(object):
     # returns the latest release information from a given user / repo
     # https://developer.github.com/v3/repos/releases/
     def getLatestRelease(self):
-        self._debug('Getting latest release from %s/%s...' % (self.owner, self.repo))
+        self.logger.debug('Getting latest release from %s/%s...' % (self.owner, self.repo))
         return self._GET('/repos/' + self.owner + '/' + self.repo + '/releases/latest')
 
     #---------------------------------------------------------------------------
@@ -129,54 +131,53 @@ class GitHubPluginUpdater(object):
 
     #---------------------------------------------------------------------------
     # form a GET request to api.github.com and return the parsed JSON response
-    def _GET(self, requestPath):
-        self._debug('GET %s' % requestPath)
 
+    def _GET(self, requestPath):
+        self.logger.debug('GET %s' % requestPath)
         headers = {
             'User-Agent': 'Indigo-Plugin-Updater',
             'Accept': 'application/vnd.github.v3+json'
         }
-
         data = None
-
-        conn = httplib.HTTPSConnection('api.github.com')
-        conn.request('GET', requestPath, None, headers)
-
-        resp = conn.getresponse()
-        self._debug('HTTP %d %s' % (resp.status, resp.reason))
-
-        if (resp.status == 200):
-            data = json.loads(resp.read())
-        elif (400 <= resp.status < 500):
-            error = json.loads(resp.read())
-            self._error('%s' % error['message'])
+        f = subprocess.Popen(["/usr/bin/curl",  'https://api.github.com'+ requestPath], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
+        out, err = f.communicate()
+        self.logger.debug(u'HTTP Err result: ' + unicode(err) )
+        self.logger.debug(u'ReturnCode:{0}'.format(unicode(f.returncode)))
+      
+        if (int(f.returncode) == 0):
+            data = json.loads(out)
+            self.logger.debug(u'Json results:' + unicode(data))
+        elif (400 <= f.status < 500):
+            error = json.loads(out)
+            self.logger.error('%s' % error['message'])
         else:
-            self._error('Error: %s' % resp.reason)
-
+            self.logger.error('Error: %s' % unicode(err))
+        
         return data
-
+        
+        
     #---------------------------------------------------------------------------
     # prepare for an update
     def _prepareForUpdate(self, currentVersion=None):
-        self._log('Checking for updates...')
+        self.logger.info('Checking for updates...')
 
         # sort out the currentVersion based on user params
         if ((currentVersion == None) and (self.plugin == None)):
-            self._error('Must provide either currentVersion or plugin reference')
+            self.logger.error('Must provide either currentVersion or plugin reference')
             return None
         elif (currentVersion == None):
             currentVersion = str(self.plugin.pluginVersion)
-            self._debug('Plugin version detected: %s' % currentVersion)
+            self.logger.debug('Plugin version detected: %s' % currentVersion)
         else:
-            self._debug('Plugin version provided: %s' % currentVersion)
+            self.logger.debug('Plugin version provided: %s' % currentVersion)
 
         update = self.getUpdate(currentVersion)
 
         if (update == None):
-            self._log('No updates are available')
+            self.logger.info('No updates are available')
             return None
 
-        self._error('A new version is available: %s' % update['html_url'])
+        self.logger.warning('A new version is available: %s' % update['html_url'])
 
         return update
 
@@ -193,7 +194,7 @@ class GitHubPluginUpdater(object):
     # reads the plugin info from the given path
     def _readPluginInfoFromPath(self, path):
         plistFile = os.path.join(path, 'Contents', 'Info.plist')
-        self._debug('Loading plugin info: %s' % plistFile)
+        self.logger.debug('Loading plugin info: %s' % plistFile)
 
         plist = plistlib.readPlist(plistFile)
 
@@ -206,7 +207,7 @@ class GitHubPluginUpdater(object):
 
         # read and the plugin info contained in the zipfile
         plistFile = os.path.join(topdir, self.path, 'Contents', 'Info.plist')
-        self._debug('Reading plugin info: %s' % plistFile)
+        self.logger.debug('Reading plugin info: %s' % plistFile)
 
         plistData = zipfile.read(plistFile)
         if (plistData == None):
@@ -219,7 +220,7 @@ class GitHubPluginUpdater(object):
     #---------------------------------------------------------------------------
     # verifies the provided plugin info matches what we expect
     def _verifyPluginInfo(self, pInfo):
-        self._debug('Verifying plugin info: %s' % pInfo.id)
+        self.logger.debug('Verifying plugin info: %s' % pInfo.id)
 
         if (pInfo.id == None):
             raise Exception('ID missing in source')
@@ -231,13 +232,13 @@ class GitHubPluginUpdater(object):
         elif (self.plugin and (self.plugin.pluginId != pInfo.id)):
             raise Exception('ID mismatch: %s' % pInfo.id)
 
-        self._debug('Verified plugin: %s' % pInfo.name)
+        self.logger.debug('Verified plugin: %s' % pInfo.name)
 
     #---------------------------------------------------------------------------
     # install a given release
     def _installRelease(self, release):
         tmpdir = tempfile.gettempdir()
-        self._debug('Workspace: %s' % tmpdir)
+        self.logger.debug('Workspace: %s' % tmpdir)
 
         # the zipfile is held in memory until we extract
         zipfile = self._getZipFileFromRelease(release)
@@ -251,21 +252,21 @@ class GitHubPluginUpdater(object):
 
         # this is where the repo files will end up after extraction
         repoBaseDir = os.path.join(tmpdir, repotag)
-        self._debug('Destination directory: %s' % repoBaseDir)
+        self.logger.debug('Destination directory: %s' % repoBaseDir)
 
         if (os.path.exists(repoBaseDir)):
             shutil.rmtree(repoBaseDir)
 
         # this is where the plugin will be after extracting
         newPluginPath = os.path.join(repoBaseDir, self.path)
-        self._debug('Plugin source path: %s' % newPluginPath)
+        self.logger.debug('Plugin source path: %s' % newPluginPath)
 
         # at this point, we should have been able to confirm the top-level directory
         # based on reading the pluginId, we know the plugin in the zipfile matches our
         # internal plugin reference (if we have one), temp directories are available
         # and we know the package location for installing the plugin
 
-        self._debug('Extracting files...')
+        self.logger.debug('Extracting files...')
         zipfile.extractall(tmpdir)
 
         # now, make sure we got what we expected
@@ -273,7 +274,7 @@ class GitHubPluginUpdater(object):
             raise Exception('Failed to extract plugin')
 
         self._installPlugin(newPluginPath)
-        self._debug('Installation complete')
+        self.logger.debug('Installation complete')
 
     #---------------------------------------------------------------------------
     # install plugin from the existing path
@@ -287,7 +288,7 @@ class GitHubPluginUpdater(object):
         # path shuffling for 'open' to work properly
         if (not pluginPath.endswith('.indigoPlugin')):
             stagedPluginPath = os.path.join(tmpdir, '%s.indigoPlugin' % pInfo.name)
-            self._debug('Staging plugin: %s' % stagedPluginPath)
+            self.logger.debug('Staging plugin: %s' % stagedPluginPath)
 
             if (os.path.exists(stagedPluginPath)):
                 shutil.rmtree(stagedPluginPath)
@@ -295,7 +296,7 @@ class GitHubPluginUpdater(object):
             os.rename(pluginPath, stagedPluginPath)
             pluginPath = stagedPluginPath
 
-        self._debug('Installing %s' % pInfo.name)
+        self.logger.debug('Installing %s' % pInfo.name)
         subprocess.call(['open', pluginPath])
 
     #---------------------------------------------------------------------------
@@ -306,63 +307,17 @@ class GitHubPluginUpdater(object):
         if (zipball == None):
             raise Exception('Invalid release package: no zipball')
 
-        self._debug('Downloading zip file: %s' % zipball)
+        self.logger.debug('Downloading zip file: %s' % zipball)
 
         zipdata = urlopen(zipball).read()
         zipfile = ZipFile(StringIO(zipdata))
 
-        self._debug('Verifying zip file (%d bytes)...' % len(zipdata))
+        self.logger.debug('Verifying zip file (%d bytes)...' % len(zipdata))
         if (zipfile.testzip() != None):
             raise Exception('Download corrupted')
 
         return zipfile
 
-    #---------------------------------------------------------------------------
-    # convenience method for log messages
-    def _log(self, msg):
-        # FIXME - this is a nasty hack, can't we pass the log call to a plugin method like debug and error?
-        try:
-            indigo.server.log(msg)
-        except:
-            print msg
-
-    #---------------------------------------------------------------------------
-    # convenience method for debug messages
-    def _debug(self, msg):
-        if self.plugin:
-            self.plugin.debugLog(msg)
-
-    #---------------------------------------------------------------------------
-    # convenience method for error messages
-    def _error(self, msg):
-        if self.plugin:
-            self.plugin.errorLog(msg)
-
 ################################################################################
 # maps the standard version string as a tuple for comparrison
 def ver(vstr): return tuple(map(int, (vstr.split('.'))))
-
-################################################################################
-## stub plugin class for testing
-class TestPluginStub(object):
-
-    #---------------------------------------------------------------------------
-    def __init__(self, version='0'):
-        self.pluginId = 'com.heddings.indigo.ghpu'
-        self.pluginName = 'Plugin Stub'
-        self.pluginVersion = version
-
-    #---------------------------------------------------------------------------
-    # expected logging methods
-    def log(self, msg): print '%s' % msg
-    def debugLog(self, msg): print '[DEBUG] %s' % msg
-    def errorLog(self, msg): print '[ERROR] %s' % msg
-
-################################################################################
-## TEST ENTRY
-if __name__ == "__main__":
-    plugin = TestPluginStub()
-
-    updater = GitHubPluginUpdater(plugin=plugin)
-    updater.update()
-
