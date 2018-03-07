@@ -6,8 +6,6 @@ import sys
 import time
 import os
 
-from ghpu import GitHubPluginUpdater
-
 from zope.interface import implements
 
 from twisted.internet import defer, reactor
@@ -149,16 +147,20 @@ class Plugin(indigo.PluginBase):
 	def __init__(self, pluginId, pluginDisplayName, pluginVersion, pluginPrefs):
 		indigo.PluginBase.__init__(self, pluginId, pluginDisplayName, pluginVersion, pluginPrefs)
 		
-		self.debug = self.pluginPrefs.get(u"showDebugInfo", False)
-		self.debugLog(u"Debugging enabled")
+        pfmt = logging.Formatter('%(asctime)s.%(msecs)03d\t[%(levelname)8s] %(name)20s.%(funcName)-25s%(msg)s', datefmt='%Y-%m-%d %H:%M:%S')
+        self.plugin_file_handler.setFormatter(pfmt)
+
+        try:
+            self.logLevel = int(self.pluginPrefs[u"logLevel"])
+        except:
+            self.logLevel = logging.INFO
+        self.indigo_log_handler.setLevel(self.logLevel)
+        self.logger.debug(u"logLevel = " + str(self.logLevel))
+
 
 	def startup(self):
 		indigo.server.log(u"Starting SMTPd")
 		
-		self.updater = GitHubPluginUpdater(self)
-		self.updateFrequency = float(self.pluginPrefs.get('updateFrequency', '24')) * 60.0 * 60.0
-		self.next_update_check = time.time()
-
 		if "SMTPd" in indigo.variables.folders:
 			myFolder = indigo.variables.folders["SMTPd"]
 		else:
@@ -219,10 +221,6 @@ class Plugin(indigo.PluginBase):
 		self.debugLog(u"validatePrefsConfigUi called")
 		errorDict = indigo.Dict()
 
-		updateFrequency = int(valuesDict['updateFrequency'])
-		if (updateFrequency < 0) or (updateFrequency > 24):
-			errorDict['updateFrequency'] = u"Update frequency is invalid - enter a valid number (between 0 and 24)"
-
 		smtpPort = int(valuesDict['smtpPort'])
 		if smtpPort < 1024:
 			errorDict['smtpPort'] = u"SMTP Port Number invalid"
@@ -233,29 +231,16 @@ class Plugin(indigo.PluginBase):
 
 	########################################
 	def closedPrefsConfigUi(self, valuesDict, userCancelled):
-		if not userCancelled:
-			self.debug = valuesDict.get("showDebugInfo", False)
-			if self.debug:
-				self.debugLog(u"Debug logging enabled")
-			else:
-				self.debugLog(u"Debug logging disabled")
+        if not userCancelled:
+            try:
+                self.logLevel = int(valuesDict[u"logLevel"])
+            except:
+                self.logLevel = logging.INFO
+            self.indigo_log_handler.setLevel(self.logLevel)
+            self.logger.debug(u"logLevel = " + str(self.logLevel))
 
 
 	########################################
 	# Menu Methods
 	########################################
-
-	def toggleDebugging(self):
-		self.debug = not self.debug
-		self.pluginPrefs["debugEnabled"] = self.debug
-		indigo.server.log("Debug set to: " + str(self.debug))
-		
-	def checkForUpdates(self):
-		self.updater.checkForUpdate()
-
-	def updatePlugin(self):
-		self.updater.update()
-
-	def forceUpdate(self):
-		self.updater.update(currentVersion='0.0.0')
 
