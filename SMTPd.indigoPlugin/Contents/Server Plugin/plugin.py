@@ -2,24 +2,13 @@
 # -*- coding: utf-8 -*-
 ####################
 
-import sys
-import time
-import os
 
-from zope.interface import implements
+import smtpd
+import asyncore
+import logging
 
-from twisted.internet import defer, reactor
-from twisted.internet.protocol import Factory, Protocol
-from twisted.mail import smtp
-from twisted.mail.imap4 import LOGINCredentials, PLAINCredentials
-
-from twisted.cred.checkers import InMemoryUsernamePasswordDatabaseDontUse
-from twisted.cred.portal import IRealm, Portal
-
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email import Charset, message_from_string
-from email.header import Header, decode_header
+from email import message_from_string
+from email.header import decode_header
 
 ########################################
 
@@ -31,56 +20,15 @@ def updateVar(name, value, folder):
 
 ########################################
 
-class SimpleRealm:
-    implements(IRealm)
+class CustomSMTPServer(smtpd.SMTPServer):
 
-    def requestAvatar(self, avatarId, mind, *interfaces):
-        if smtp.IMessageDelivery in interfaces:
-            return smtp.IMessageDelivery, SMTPdMessageDelivery(), lambda: None
-        raise NotImplementedError()
+    def process_message(self, peer, mailfrom, rcpttos, data):
+        print 'Receiving message from:', peer
+        print 'Message addressed from:', mailfrom
+        print 'Message addressed to  :', rcpttos
+        print 'Message length        :', len(data)
 
-########################################
-
-class MySMTPFactory(smtp.SMTPFactory):
-    protocol = smtp.ESMTP
-
-    def __init__(self, *a, **kw):
-        smtp.SMTPFactory.__init__(self, *a, **kw)
-        self.delivery = SMTPdMessageDelivery()
-
-    def buildProtocol(self, addr):
-        p = smtp.SMTPFactory.buildProtocol(self, addr)
-        p.delivery = self.delivery
-        p.challengers = {"LOGIN": LOGINCredentials, "PLAIN": PLAINCredentials}
-        return p
-
-########################################
-
-class SMTPdMessageDelivery:
-    implements(smtp.IMessageDelivery)
-    
-    def receivedHeader(self, helo, origin, recipients):
-        return "Received: SMTPd-Message-Delivery"
-    
-    def validateFrom(self, helo, origin):       # All addresses are accepted
-        return origin
-
-    def validateTo(self, user):                 # any user address
-        return lambda: MessageHandler()
-
-########################################
-
-class MessageHandler:
-    implements(smtp.IMessage)
-    
-    def __init__(self):
-        self.lines = []
-
-    def lineReceived(self, line):
-        self.lines.append(line)
-
-    def eomReceived(self):      
-        message = message_from_string("\n".join(self.lines))
+        message = message_from_string(data)
         
         bytes, encoding = decode_header(message.get("To"))[0]
         if encoding:
@@ -134,9 +82,6 @@ class MessageHandler:
         self.lines = None
         return defer.succeed(None)
     
-    def connectionLost(self):       # There was an error, throw away the stored lines
-        self.lines = None
-
 
 ################################################################################
 class Plugin(indigo.PluginBase):
@@ -169,32 +114,26 @@ class Plugin(indigo.PluginBase):
 
         self.triggers = { }
 
+        port = int(self.pluginPrefs.get('smtpPort', '2525'))
+
+        self.server = CustomSMTPServer(('127.0.0.1', port), None)
+
     def shutdown(self):
         indigo.server.log(u"Shutting down SMTPd")
         
 
     def runConcurrentThread(self):
         
-        port = int(self.pluginPrefs.get('smtpPort', '2525'))
-        user = self.pluginPrefs.get('smtpUser', 'guest')
-        password = self.pluginPrefs.get('smtpPassword', 'password')
-                            
-        portal = Portal(SimpleRealm())
-        checker = InMemoryUsernamePasswordDatabaseDontUse()
-        checker.addUser(user, password)
-        portal.registerChecker(checker)
 
         try:
-            self.smtpFactory = MySMTPFactory(portal)
-            self.listeningPort = reactor.listenTCP(port, self.smtpFactory)
-            reactor.run()
+            while True:
+                asyncore.loop(timeout=1, count=5)
+                self.sleep(0.1)
+                
         except self.StopThread:
-            pass    # Optionally catch the StopThread exception and do any needed cleanup.
+            pass 
 
-    def stopConcurrentThread(self):
-        indigo.PluginBase.stopConcurrentThread(self)
-        reactor.callFromThread(self.listeningPort.stopListening)
-        reactor.callFromThread(reactor.stop)
+        
     
 
     ####################

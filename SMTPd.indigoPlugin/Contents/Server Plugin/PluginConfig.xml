@@ -4,12 +4,6 @@
 	<Field id="smtpPort" type="textfield"  defaultValue="4321">
 		<Label>Port Number:</Label>
 	</Field>
-	<Field id="smtpUser" type="textfield" defaultValue="guest">
-		<Label>Username:</Label>
-	</Field>
-	<Field id="smtpPassword" type="textfield" defaultValue="password">
-		<Label>Password:</Label>
-	</Field>
 	<Field id="sep0" type="separator"/>
     <Field id="logLevel" type="menu" defaultValue="20">
         <Label>Event Logging Level:</Label>
