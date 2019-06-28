@@ -116,7 +116,7 @@ class Plugin(indigo.PluginBase):
 
         port = int(self.pluginPrefs.get('smtpPort', '2525'))
 
-        self.server = CustomSMTPServer(('127.0.0.1', port), None)
+        self.server = CustomSMTPServer(('', port), None)
 
     def shutdown(self):
         indigo.server.log(u"Shutting down SMTPd")
