@@ -106,9 +106,7 @@ class SMTPChannel(asynchat.async_chat):
             indigo.activePlugin.debugLog('Password: {}'.format(password))
 
             if self.__server.validate_auth(self.__username, password):
-            
                 self.push('235 Authentication succeeded')
-            
             else:
                 self.push('535 Authentication failed')
 
@@ -128,10 +126,7 @@ class SMTPChannel(asynchat.async_chat):
                 else:
                     data.append(text)
             self.__data = '\n'.join(data)
-            self.__server.process_message(self.__peer,
-                                                   self.__mailfrom,
-                                                   self.__rcpttos,
-                                                   self.__data)
+            self.__server.process_message(self.__peer, self.__mailfrom, self.__rcpttos, self.__data)
             self.__rcpttos = []
             self.__mailfrom = None
             self.__state = self.COMMAND
@@ -150,16 +145,33 @@ class SMTPChannel(asynchat.async_chat):
         else:
             self.__greeting = arg
             self.push('250 {}'.format(self.__fqdn))
-#            self.push('250 AUTH PLAIN LOGIN')
+            self.push('250 AUTH LOGIN PLAIN')
 
     def smtp_AUTH(self, arg):
         indigo.activePlugin.debugLog('Received AUTH: {}'.format(arg))
 
         if not arg:
             self.push('501 Syntax: AUTH LOGIN')
+
         elif arg == 'LOGIN':
             self.push('334 VXNlcm5hbWU6')
             self.__state = self.USERNAME
+
+        elif arg[0:5] == 'PLAIN':
+        
+            id, username, password = base64.decodestring(arg[6:]).split('\0')
+            
+            indigo.activePlugin.debugLog('Username: {}'.format(username))
+            indigo.activePlugin.debugLog('Password: {}'.format(password))
+            
+            if self.__server.validate_auth(username, password):
+                self.push('235 Authentication succeeded')
+            else:
+                self.push('535 Authentication failed')
+
+        else:
+            self.push('535 Unsupported AUTH method')
+        
 
     def smtp_NOOP(self, arg):
         indigo.activePlugin.debugLog('Received NOOP: {}'.format(arg))
