@@ -3,6 +3,7 @@
 ####################
 
 
+import base64
 import logging
 import errno
 import time
@@ -41,6 +42,8 @@ class SMTPChannel(asynchat.async_chat):
         self.__mailfrom = None
         self.__rcpttos = []
         self.__data = ''
+        self.__username = None
+        
         self.__fqdn = socket.getfqdn()
         try:
             self.__peer = conn.getpeername()
@@ -91,16 +94,24 @@ class SMTPChannel(asynchat.async_chat):
 
         elif self.__state == self.USERNAME:
 
-            # could check username here
+            self.__username = base64.decodestring(line)
+            indigo.activePlugin.debugLog('Username: {}'.format(self.__username))
             
             self.push('334 UGFzc3dvcmQ6')
             self.__state = self.PASSWORD
 
         elif self.__state == self.PASSWORD:
             
-            # could check password here
+            password = base64.decodestring(line)
+            indigo.activePlugin.debugLog('Password: {}'.format(password))
 
-            self.push('235 Authentication succeeded')
+            if self.__server.validate_auth(self.__username, password):
+            
+                self.push('235 Authentication succeeded')
+            
+            else:
+                self.push('535 Authentication failed')
+
             self.__state = self.COMMAND
            
         else:
@@ -117,7 +128,7 @@ class SMTPChannel(asynchat.async_chat):
                 else:
                     data.append(text)
             self.__data = '\n'.join(data)
-            status = self.__server.process_message(self.__peer,
+            self.__server.process_message(self.__peer,
                                                    self.__mailfrom,
                                                    self.__rcpttos,
                                                    self.__data)
@@ -125,10 +136,7 @@ class SMTPChannel(asynchat.async_chat):
             self.__mailfrom = None
             self.__state = self.COMMAND
             self.set_terminator('\r\n')
-            if not status:
-                self.push('250 Ok')
-            else:
-                self.push(status)
+            self.push('250 Ok')
 
     # SMTP and ESMTP commands
     def smtp_HELO(self, arg):
@@ -237,33 +245,44 @@ class SMTPChannel(asynchat.async_chat):
 ################################################################################
 
 class SMTPServer(asyncore.dispatcher):
-    def __init__(self, localaddr, remoteaddr):
-        self._localaddr = localaddr
-        self._remoteaddr = remoteaddr
+
+    def __init__(self, port, username, password):
+
+        self.username = username
+        self.password = password
+        
         asyncore.dispatcher.__init__(self)
         try:
             self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
             # try to re-use a server port if possible
             self.set_reuse_addr()
-            self.bind(localaddr)
+            self.bind(('', port))
             self.listen(5)
         except:
             # cleanup asyncore.socket_map before raising
             self.close()
             raise
         else:
-            indigo.activePlugin.debugLog('{} started at {}\n\tLocal addr: {}\n\tRemote addr:{}'.format(
-                self.__class__.__name__, time.ctime(time.time()),
-                localaddr, remoteaddr))
+            indigo.activePlugin.debugLog('{} started on: {}'.format(self.__class__.__name__, port))
 
     def handle_accept(self):
+        indigo.activePlugin.debugLog('SMTPServer.handle_accept()')
         pair = self.accept()
         if pair is not None:
             conn, addr = pair
             indigo.activePlugin.debugLog('Incoming connection from {}'.format(repr(addr)))
             channel = SMTPChannel(self, conn, addr)
 
+    def validate_auth(self, username, password):
+        indigo.activePlugin.debugLog('SMTPServer.validate_auth({}, {})'.format(username, password))
+    
+        if self.username == username and self.password == password:
+            return True
+        else:
+            return False
+        
     def process_message(self, peer, mailfrom, rcpttos, data):
+        indigo.activePlugin.debugLog('SMTPServer.process_message()')
         indigo.activePlugin.debugLog('Receiving message from: {}'.format(peer))
         indigo.activePlugin.debugLog('Message addressed from: {}'.format(mailfrom))
         indigo.activePlugin.debugLog('Message addressed to  : {}'.format(rcpttos))
@@ -356,10 +375,10 @@ class Plugin(indigo.PluginBase):
         self.triggers = { }
 
         port = int(self.pluginPrefs.get('smtpPort', '2525'))
-        user = self.pluginPrefs.get('smtpUser', 'guest')
+        username = self.pluginPrefs.get('smtpUser', 'guest')
         password = self.pluginPrefs.get('smtpPassword', 'password')
 
-        self.server = SMTPServer(('', port), None)
+        self.server = SMTPServer(port, username, password)
 
     def shutdown(self):
         indigo.server.log(u"Shutting down SMTPd")
