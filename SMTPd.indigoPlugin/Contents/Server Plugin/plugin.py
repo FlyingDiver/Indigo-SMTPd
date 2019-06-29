@@ -3,9 +3,13 @@
 ####################
 
 
-import smtpd
-import asyncore
 import logging
+import errno
+import time
+import socket
+import asyncore
+import asynchat
+
 
 from email import message_from_string
 from email.header import decode_header
@@ -20,13 +24,250 @@ def updateVar(name, value, folder):
 
 ########################################
 
-class CustomSMTPServer(smtpd.SMTPServer):
+class SMTPChannel(asynchat.async_chat):
+    COMMAND = 0
+    DATA = 1
+    USERNAME = 2
+    PASSWORD = 3
+    
+    def __init__(self, server, conn, addr):
+        asynchat.async_chat.__init__(self, conn)
+        self.__server = server
+        self.__conn = conn
+        self.__addr = addr
+        self.__line = []
+        self.__state = self.COMMAND
+        self.__greeting = 0
+        self.__mailfrom = None
+        self.__rcpttos = []
+        self.__data = ''
+        self.__fqdn = socket.getfqdn()
+        try:
+            self.__peer = conn.getpeername()
+        except socket.error, err:
+            # a race condition  may occur if the other end is closing
+            # before we can get the peername
+            self.close()
+            if err[0] != errno.ENOTCONN:
+                raise
+            return
+        indigo.activePlugin.debugLog('Channel Peer: {}'.format(repr(self.__peer)))
+        self.push('220 {} Indigo SMTPd plugin version {}'.format(self.__fqdn, indigo.activePlugin.pluginVersion))
+        self.set_terminator('\r\n')
+
+    # Overrides base class for convenience
+    def push(self, msg):
+        indigo.activePlugin.debugLog('Sending: {}'.format(msg))
+        asynchat.async_chat.push(self, msg + '\r\n')
+
+    # Implementation of base class abstract method
+    def collect_incoming_data(self, data):
+        self.__line.append(data)
+
+    # Implementation of base class abstract method
+    def found_terminator(self):
+        line = ''.join(self.__line)
+        indigo.activePlugin.debugLog('Received: {}'.format(repr(line)))
+        
+        self.__line = []
+        if self.__state == self.COMMAND:
+            if not line:
+                self.push('500 Error: bad syntax')
+                return
+            method = None
+            i = line.find(' ')
+            if i < 0:
+                command = line.upper()
+                arg = None
+            else:
+                command = line[:i].upper()
+                arg = line[i+1:].strip()
+            method = getattr(self, 'smtp_' + command, None)
+            if not method:
+                self.push('502 Error: command "{}" not implemented'.format(command))
+                return
+            method(arg)
+            return
+
+        elif self.__state == self.USERNAME:
+
+            # could check username here
+            
+            self.push('334 UGFzc3dvcmQ6')
+            self.__state = self.PASSWORD
+
+        elif self.__state == self.PASSWORD:
+            
+            # could check password here
+
+            self.push('235 Authentication succeeded')
+            self.__state = self.COMMAND
+           
+        else:
+            if self.__state != self.DATA:
+                self.push('451 Internal confusion')
+                return
+                
+            # Remove extraneous carriage returns and de-transparency according
+            # to RFC 821, Section 4.5.2.
+            data = []
+            for text in line.split('\r\n'):
+                if text and text[0] == '.':
+                    data.append(text[1:])
+                else:
+                    data.append(text)
+            self.__data = '\n'.join(data)
+            status = self.__server.process_message(self.__peer,
+                                                   self.__mailfrom,
+                                                   self.__rcpttos,
+                                                   self.__data)
+            self.__rcpttos = []
+            self.__mailfrom = None
+            self.__state = self.COMMAND
+            self.set_terminator('\r\n')
+            if not status:
+                self.push('250 Ok')
+            else:
+                self.push(status)
+
+    # SMTP and ESMTP commands
+    def smtp_HELO(self, arg):
+        indigo.activePlugin.debugLog('Received HELO: {}'.format(arg))
+
+        if not arg:
+            self.push('501 Syntax: HELO hostname')
+            return
+        if self.__greeting:
+            self.push('503 Duplicate HELO/EHLO')
+        else:
+            self.__greeting = arg
+            self.push('250 {}'.format(self.__fqdn))
+#            self.push('250 AUTH PLAIN LOGIN')
+
+    def smtp_AUTH(self, arg):
+        indigo.activePlugin.debugLog('Received AUTH: {}'.format(arg))
+
+        if not arg:
+            self.push('501 Syntax: AUTH LOGIN')
+        elif arg == 'LOGIN':
+            self.push('334 VXNlcm5hbWU6')
+            self.__state = self.USERNAME
+
+    def smtp_NOOP(self, arg):
+        indigo.activePlugin.debugLog('Received NOOP: {}'.format(arg))
+
+        if arg:
+            self.push('501 Syntax: NOOP')
+        else:
+            self.push('250 Ok')
+
+    def smtp_QUIT(self, arg):
+        indigo.activePlugin.debugLog('Received QUIT: {}'.format(arg))
+
+        # args is ignored
+        self.push('221 Bye')
+        self.close_when_done()
+
+    # factored
+    def __getaddr(self, keyword, arg):
+        address = None
+        keylen = len(keyword)
+        if arg[:keylen].upper() == keyword:
+            address = arg[keylen:].strip()
+            if not address:
+                pass
+            elif address[0] == '<' and address[-1] == '>' and address != '<>':
+                # Addresses can be in the form <person@dom.com> but watch out
+                # for null address, e.g. <>
+                address = address[1:-1]
+        return address
+
+    def smtp_MAIL(self, arg):
+        indigo.activePlugin.debugLog('Received MAIL: {}'.format(arg))
+
+        address = self.__getaddr('FROM:', arg) if arg else None
+        if not address:
+            self.push('501 Syntax: MAIL FROM:<address>')
+            return
+        if self.__mailfrom:
+            self.push('503 Error: nested MAIL command')
+            return
+        self.__mailfrom = address
+        self.push('250 Ok')
+
+    def smtp_RCPT(self, arg):
+        indigo.activePlugin.debugLog('Received RCPT: {}'.format(arg))
+        
+        if not self.__mailfrom:
+            self.push('503 Error: need MAIL command')
+            return
+        address = self.__getaddr('TO:', arg) if arg else None
+        if not address:
+            self.push('501 Syntax: RCPT TO: <address>')
+            return
+        self.__rcpttos.append(address)
+        self.push('250 Ok')
+
+    def smtp_RSET(self, arg):
+        indigo.activePlugin.debugLog('Received RSET: {}'.format(arg))
+
+        if arg:
+            self.push('501 Syntax: RSET')
+            return
+        # Resets the sender, recipients, and data, but not the greeting
+        self.__mailfrom = None
+        self.__rcpttos = []
+        self.__data = ''
+        self.__state = self.COMMAND
+        self.push('250 Ok')
+
+    def smtp_DATA(self, arg):
+        indigo.activePlugin.debugLog('Received DATA: {}'.format(arg))
+
+        if not self.__rcpttos:
+            self.push('503 Error: need RCPT command')
+            return
+        if arg:
+            self.push('501 Syntax: DATA')
+            return
+        self.__state = self.DATA
+        self.set_terminator('\r\n.\r\n')
+        self.push('354 End data with <CR><LF>.<CR><LF>')
+
+################################################################################
+
+class SMTPServer(asyncore.dispatcher):
+    def __init__(self, localaddr, remoteaddr):
+        self._localaddr = localaddr
+        self._remoteaddr = remoteaddr
+        asyncore.dispatcher.__init__(self)
+        try:
+            self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+            # try to re-use a server port if possible
+            self.set_reuse_addr()
+            self.bind(localaddr)
+            self.listen(5)
+        except:
+            # cleanup asyncore.socket_map before raising
+            self.close()
+            raise
+        else:
+            indigo.activePlugin.debugLog('{} started at {}\n\tLocal addr: {}\n\tRemote addr:{}'.format(
+                self.__class__.__name__, time.ctime(time.time()),
+                localaddr, remoteaddr))
+
+    def handle_accept(self):
+        pair = self.accept()
+        if pair is not None:
+            conn, addr = pair
+            indigo.activePlugin.debugLog('Incoming connection from {}'.format(repr(addr)))
+            channel = SMTPChannel(self, conn, addr)
 
     def process_message(self, peer, mailfrom, rcpttos, data):
-        print 'Receiving message from:', peer
-        print 'Message addressed from:', mailfrom
-        print 'Message addressed to  :', rcpttos
-        print 'Message length        :', len(data)
+        indigo.activePlugin.debugLog('Receiving message from: {}'.format(peer))
+        indigo.activePlugin.debugLog('Message addressed from: {}'.format(mailfrom))
+        indigo.activePlugin.debugLog('Message addressed to  : {}'.format(rcpttos))
+        indigo.activePlugin.debugLog('Message length        : {}'.format(len(data)))
 
         message = message_from_string(data)
         
@@ -67,10 +308,10 @@ class CustomSMTPServer(smtpd.SMTPServer):
             indigo.activePlugin.debugLog('Error decoding Body of Message # ' + messageNum + ": " + str(e))
             messageText = u""   
 
-        indigo.activePlugin.debugLog(u"Received Message To: " + messageTo)
-        indigo.activePlugin.debugLog(u"Received Message From: " + messageFrom)
-        indigo.activePlugin.debugLog(u"Received Message Subject: " + messageSubject)
-        indigo.activePlugin.debugLog(u"Received Message Text: " + messageText)
+        indigo.activePlugin.debugLog(u"Received Message To: {}".format(messageTo))
+        indigo.activePlugin.debugLog(u"Received Message From: {}".format(messageFrom))
+        indigo.activePlugin.debugLog(u"Received Message Subject: {}".format(messageSubject))
+        indigo.activePlugin.debugLog(u"Received Message Text: {}".format(messageText))
         
         updateVar("smtpd_messageTo",      messageTo,      indigo.activePlugin.pluginPrefs["folderId"])
         updateVar("smtpd_messageFrom",    messageFrom,    indigo.activePlugin.pluginPrefs["folderId"])
@@ -80,10 +321,10 @@ class CustomSMTPServer(smtpd.SMTPServer):
         indigo.activePlugin.triggerCheck()
 
         self.lines = None
-        return defer.succeed(None)
-    
+
 
 ################################################################################
+
 class Plugin(indigo.PluginBase):
                     
     ########################################
@@ -115,8 +356,10 @@ class Plugin(indigo.PluginBase):
         self.triggers = { }
 
         port = int(self.pluginPrefs.get('smtpPort', '2525'))
+        user = self.pluginPrefs.get('smtpUser', 'guest')
+        password = self.pluginPrefs.get('smtpPassword', 'password')
 
-        self.server = CustomSMTPServer(('', port), None)
+        self.server = SMTPServer(('', port), None)
 
     def shutdown(self):
         indigo.server.log(u"Shutting down SMTPd")

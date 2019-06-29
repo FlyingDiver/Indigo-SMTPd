@@ -1,40 +1,4 @@
 #! /usr/bin/env python
-"""An RFC 2821 smtp proxy.
-
-Usage: %(program)s [options] [localhost:localport [remotehost:remoteport]]
-
-Options:
-
-    --nosetuid
-    -n
-        This program generally tries to setuid `nobody', unless this flag is
-        set.  The setuid call will fail if this program is not run as root (in
-        which case, use this flag).
-
-    --version
-    -V
-        Print the version number and exit.
-
-    --class classname
-    -c classname
-        Use `classname' as the concrete SMTP proxy class.  Uses `PureProxy' by
-        default.
-
-    --debug
-    -d
-        Turn on debugging prints.
-
-    --help
-    -h
-        Print this message and exit.
-
-Version: %(__version__)s
-
-If localhost is not given then `localhost' is used, and if localport is not
-given then 8025 is used.  If remotehost is not given then `localhost' is used,
-and if remoteport is not given, then 25 is used.
-"""
-
 # Overview:
 #
 # This file implements the minimal SMTP protocol as defined in RFC 821.  It
@@ -80,7 +44,6 @@ import asynchat
 
 __all__ = ["SMTPServer","DebuggingServer","PureProxy","MailmanProxy"]
 
-# program = sys.argv[0]
 __version__ = 'Python SMTP proxy version 0.2'
 
 
@@ -458,98 +421,3 @@ class MailmanProxy(PureProxy):
                 else:
                     msg['Subject'] = 'unsubscribe'
                 msg.Enqueue(mlist, torequest=1)
-
-
-class Options:
-    setuid = 1
-    classname = 'PureProxy'
-
-
-def parseargs():
-    global DEBUGSTREAM
-    try:
-        opts, args = getopt.getopt(
-            sys.argv[1:], 'nVhc:d',
-            ['class=', 'nosetuid', 'version', 'help', 'debug'])
-    except getopt.error, e:
-        usage(1, e)
-
-    options = Options()
-    for opt, arg in opts:
-        if opt in ('-h', '--help'):
-            usage(0)
-        elif opt in ('-V', '--version'):
-            print >> sys.stderr, __version__
-            sys.exit(0)
-        elif opt in ('-n', '--nosetuid'):
-            options.setuid = 0
-        elif opt in ('-c', '--class'):
-            options.classname = arg
-        elif opt in ('-d', '--debug'):
-            DEBUGSTREAM = sys.stderr
-
-    # parse the rest of the arguments
-    if len(args) < 1:
-        localspec = 'localhost:8025'
-        remotespec = 'localhost:25'
-    elif len(args) < 2:
-        localspec = args[0]
-        remotespec = 'localhost:25'
-    elif len(args) < 3:
-        localspec = args[0]
-        remotespec = args[1]
-    else:
-        usage(1, 'Invalid arguments: %s' % COMMASPACE.join(args))
-
-    # split into host/port pairs
-    i = localspec.find(':')
-    if i < 0:
-        usage(1, 'Bad local spec: %s' % localspec)
-    options.localhost = localspec[:i]
-    try:
-        options.localport = int(localspec[i+1:])
-    except ValueError:
-        usage(1, 'Bad local port: %s' % localspec)
-    i = remotespec.find(':')
-    if i < 0:
-        usage(1, 'Bad remote spec: %s' % remotespec)
-    options.remotehost = remotespec[:i]
-    try:
-        options.remoteport = int(remotespec[i+1:])
-    except ValueError:
-        usage(1, 'Bad remote port: %s' % remotespec)
-    return options
-
-
-if __name__ == '__main__':
-    options = parseargs()
-    # Become nobody
-    classname = options.classname
-    if "." in classname:
-        lastdot = classname.rfind(".")
-        mod = __import__(classname[:lastdot], globals(), locals(), [""])
-        classname = classname[lastdot+1:]
-    else:
-        import __main__ as mod
-    class_ = getattr(mod, classname)
-    proxy = class_((options.localhost, options.localport),
-                   (options.remotehost, options.remoteport))
-    if options.setuid:
-        try:
-            import pwd
-        except ImportError:
-            print >> sys.stderr, \
-                  'Cannot import module "pwd"; try running with -n option.'
-            sys.exit(1)
-        nobody = pwd.getpwnam('nobody')[2]
-        try:
-            os.setuid(nobody)
-        except OSError, e:
-            if e.errno != errno.EPERM: raise
-            print >> sys.stderr, \
-                  'Cannot setuid "nobody"; try running with -n option.'
-            sys.exit(1)
-    try:
-        asyncore.loop()
-    except KeyboardInterrupt:
-        pass
