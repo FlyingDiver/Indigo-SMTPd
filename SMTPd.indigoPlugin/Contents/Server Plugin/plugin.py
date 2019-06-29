@@ -54,20 +54,16 @@ class SMTPChannel(asynchat.async_chat):
             if err[0] != errno.ENOTCONN:
                 raise
             return
-        indigo.activePlugin.debugLog('Channel Peer: {}'.format(repr(self.__peer)))
         self.push('220 {} Indigo SMTPd plugin version {}'.format(self.__fqdn, indigo.activePlugin.pluginVersion))
         self.set_terminator('\r\n')
 
-    # Overrides base class for convenience
     def push(self, msg):
         indigo.activePlugin.debugLog('Sending: {}'.format(msg))
         asynchat.async_chat.push(self, msg + '\r\n')
 
-    # Implementation of base class abstract method
     def collect_incoming_data(self, data):
         self.__line.append(data)
 
-    # Implementation of base class abstract method
     def found_terminator(self):
         line = ''.join(self.__line)
         indigo.activePlugin.debugLog('Received: {}'.format(repr(line)))
@@ -117,8 +113,7 @@ class SMTPChannel(asynchat.async_chat):
                 self.push('451 Internal confusion')
                 return
                 
-            # Remove extraneous carriage returns and de-transparency according
-            # to RFC 821, Section 4.5.2.
+            # Remove extraneous carriage returns and de-transparency according to RFC 821, Section 4.5.2.
             data = []
             for text in line.split('\r\n'):
                 if text and text[0] == '.':
@@ -133,9 +128,7 @@ class SMTPChannel(asynchat.async_chat):
             self.set_terminator('\r\n')
             self.push('250 Ok')
 
-    # SMTP and ESMTP commands
     def smtp_HELO(self, arg):
-        indigo.activePlugin.debugLog('Received HELO: {}'.format(arg))
 
         if not arg:
             self.push('501 Syntax: HELO hostname')
@@ -145,20 +138,18 @@ class SMTPChannel(asynchat.async_chat):
         else:
             self.__greeting = arg
             self.push('250 {}'.format(self.__fqdn))
-            self.push('250 AUTH LOGIN PLAIN')
 
     def smtp_AUTH(self, arg):
-        indigo.activePlugin.debugLog('Received AUTH: {}'.format(arg))
 
         if not arg:
             self.push('501 Syntax: AUTH LOGIN')
+            self.__state = self.COMMAND
 
         elif arg == 'LOGIN':
             self.push('334 VXNlcm5hbWU6')
             self.__state = self.USERNAME
 
         elif arg[0:5] == 'PLAIN':
-        
             id, username, password = base64.decodestring(arg[6:]).split('\0')
             
             indigo.activePlugin.debugLog('Username: {}'.format(username))
@@ -168,13 +159,14 @@ class SMTPChannel(asynchat.async_chat):
                 self.push('235 Authentication succeeded')
             else:
                 self.push('535 Authentication failed')
+            self.__state = self.COMMAND
 
         else:
             self.push('535 Unsupported AUTH method')
+            self.__state = self.COMMAND
         
 
     def smtp_NOOP(self, arg):
-        indigo.activePlugin.debugLog('Received NOOP: {}'.format(arg))
 
         if arg:
             self.push('501 Syntax: NOOP')
@@ -182,7 +174,6 @@ class SMTPChannel(asynchat.async_chat):
             self.push('250 Ok')
 
     def smtp_QUIT(self, arg):
-        indigo.activePlugin.debugLog('Received QUIT: {}'.format(arg))
 
         # args is ignored
         self.push('221 Bye')
@@ -203,7 +194,6 @@ class SMTPChannel(asynchat.async_chat):
         return address
 
     def smtp_MAIL(self, arg):
-        indigo.activePlugin.debugLog('Received MAIL: {}'.format(arg))
 
         address = self.__getaddr('FROM:', arg) if arg else None
         if not address:
@@ -216,7 +206,6 @@ class SMTPChannel(asynchat.async_chat):
         self.push('250 Ok')
 
     def smtp_RCPT(self, arg):
-        indigo.activePlugin.debugLog('Received RCPT: {}'.format(arg))
         
         if not self.__mailfrom:
             self.push('503 Error: need MAIL command')
@@ -229,7 +218,6 @@ class SMTPChannel(asynchat.async_chat):
         self.push('250 Ok')
 
     def smtp_RSET(self, arg):
-        indigo.activePlugin.debugLog('Received RSET: {}'.format(arg))
 
         if arg:
             self.push('501 Syntax: RSET')
@@ -242,7 +230,6 @@ class SMTPChannel(asynchat.async_chat):
         self.push('250 Ok')
 
     def smtp_DATA(self, arg):
-        indigo.activePlugin.debugLog('Received DATA: {}'.format(arg))
 
         if not self.__rcpttos:
             self.push('503 Error: need RCPT command')
