@@ -5,7 +5,6 @@
 import indigo  # noqa
 import logging
 
-import asyncio
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import AuthResult, LoginPassword
 
@@ -40,22 +39,23 @@ class Handler:
     def __init__(self):
         self.logger = logging.getLogger("Plugin.Handler")
 
-    async def handle_RCPT(self, server, session, envelope, address, rcpt_options):
+    @staticmethod
+    async def handle_RCPT(_server, _session, envelope, address, _rcpt_options):
         envelope.rcpt_tos.append(address)
         return '250 OK'
 
-    async def handle_DATA(self, server, session, envelope):
+    async def handle_DATA(self, _server, _session, envelope):
 
         message = message_from_string(envelope.content)
 
-        bytes, encoding = decode_header(message.get("To"))[0]
-        messageTo = bytes.decode(encoding) if encoding else message.get("To")
+        rbytes, encoding = decode_header(message.get("To"))[0]
+        messageTo = rbytes.decode(encoding) if encoding else message.get("To")
 
-        bytes, encoding = decode_header(message.get("From"))[0]
-        messageFrom = bytes.decode(encoding) if encoding else message.get("From")
+        rbytes, encoding = decode_header(message.get("From"))[0]
+        messageFrom = rbytes.decode(encoding) if encoding else message.get("From")
 
-        bytes, encoding = decode_header(message.get("Subject"))[0]
-        messageSubject = bytes.decode(encoding) if encoding else message.get("Subject")
+        rbytes, encoding = decode_header(message.get("Subject"))[0]
+        messageSubject = rbytes.decode(encoding) if encoding else message.get("Subject")
 
         if message.is_multipart():
             part0 = message.get_payload(0)      # we only look at the first alternative content part
@@ -150,7 +150,7 @@ class Plugin(indigo.PluginBase):
         smtpPort = int(valuesDict['smtpPort'])
         if smtpPort < 1024:
             errorDict['smtpPort'] = "SMTP Port Number invalid"
-
+            self.logger.warning(f"Invalid smtpPort = {smtpPort}")
         if len(errorDict) > 0:
             return False, valuesDict, errorDict
         return True, valuesDict
