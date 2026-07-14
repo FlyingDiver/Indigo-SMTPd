@@ -1,0 +1,16 @@
+SMTPd.indigoPlugin/Contents/Server Plugin/ghpu.pyc
+SMTPd.indigoPlugin/Contents/Server Plugin/smtpd.pyc
+.gitignore
+/client.py
+/SMTPd.indigoPlugin.zip
+
+.DS_Store
+
+/.idea/
+SMTPd.indigoPlugin/.idea/
+
+SMTPd.indigoPlugin/Contents/Server Plugin/aiosmtpd/__pycache__/
+
+SMTPd.indigoPlugin/Contents/Server Plugin/attr/__pycache__/
+
+SMTPd.indigoPlugin/Contents/Server Plugin/public/__pycache__/
